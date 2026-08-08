@@ -2,6 +2,7 @@ openpyxl>=3.1.0
 numpy>=1.26.0
 scipy>=1.11.0
 pandas>=2.0.0
+matplotlib>=3.8.0
 
 # Optional: Jira Cloud/Server API client (used by jira_loader)
 # jira>=3.5.0

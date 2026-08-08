@@ -15,6 +15,9 @@ pip install -r requirements.txt
 ```bash
 python3 -m sprint_forecast excel
 python3 -m sprint_forecast excel --json
+# график «Расширенная диаграмма выгорания» → burn_chart.png
+python3 -m sprint_forecast excel --chart burn_chart.png
+python3 -m sprint_forecast excel --no-chart   # без графика
 ```
 
 Проверка, что результат совпадает с кэшированными значениями Excel:

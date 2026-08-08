@@ -7,3 +7,6 @@ venv/
 .mypy_cache/
 .ruff_cache/
 .env
+burn_chart.png
+*.png
+!docs/**/*.png

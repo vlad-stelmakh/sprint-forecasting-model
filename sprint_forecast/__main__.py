@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .excel_loader import load_excel_params, load_plan_from_excel
 from .model import compute_forecast, forecast_to_dataframe
+from .plot import plot_burn_chart
 
 
 def _print_summary(forecast) -> None:
@@ -45,6 +46,13 @@ def _print_summary(forecast) -> None:
             )
 
 
+def _maybe_plot(forecast, args: argparse.Namespace) -> None:
+    if args.no_chart:
+        return
+    path = plot_burn_chart(forecast, output=args.chart, show=args.show_chart)
+    print(f"\nГрафик сохранён: {path.resolve()}")
+
+
 def cmd_excel(args: argparse.Namespace) -> int:
     path = Path(args.excel)
     items = load_plan_from_excel(path)
@@ -69,6 +77,7 @@ def cmd_excel(args: argparse.Namespace) -> int:
             "addlocity_std": forecast.addlocity_std,
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+    _maybe_plot(forecast, args)
     return 0
 
 
@@ -92,7 +101,26 @@ def cmd_jira(args: argparse.Namespace) -> int:
         report_date=date.fromisoformat(args.report_date) if args.report_date else None,
     )
     _print_summary(forecast)
+    _maybe_plot(forecast, args)
     return 0
+
+
+def _add_chart_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--chart",
+        default="burn_chart.png",
+        help="Куда сохранить график (по умолчанию burn_chart.png)",
+    )
+    parser.add_argument(
+        "--no-chart",
+        action="store_true",
+        help="Не строить график",
+    )
+    parser.add_argument(
+        "--show-chart",
+        action="store_true",
+        help="Показать окно matplotlib (если есть дисплей)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -109,6 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_excel.add_argument("--sprint-count", type=int, default=15)
     p_excel.add_argument("--json", action="store_true")
+    _add_chart_args(p_excel)
     p_excel.set_defaults(func=cmd_excel)
 
     p_jira = sub.add_parser("jira", help="Загрузить задачи эпика из Jira и посчитать прогноз")
@@ -126,6 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="customfield_10016",
         help="Jira custom field id для Story Points",
     )
+    _add_chart_args(p_jira)
     p_jira.set_defaults(func=cmd_jira)
 
     return parser
