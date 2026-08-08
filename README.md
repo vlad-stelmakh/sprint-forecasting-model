@@ -16,6 +16,7 @@ pip install -r requirements.txt
 python3 -m sprint_forecast excel
 python3 -m sprint_forecast excel --json
 # график «Расширенная диаграмма выгорания» → burn_chart.png
+# (вероятности — отдельная панель 0–100%, без кривой вторичной оси Excel)
 python3 -m sprint_forecast excel --chart burn_chart.png
 python3 -m sprint_forecast excel --no-chart   # без графика
 ```
