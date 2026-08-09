@@ -10,3 +10,4 @@ venv/
 burn_chart.png
 *.png
 !docs/**/*.png
+.mplconfig/

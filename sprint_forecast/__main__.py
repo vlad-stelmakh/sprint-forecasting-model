@@ -12,13 +12,22 @@ from .model import compute_forecast, forecast_to_dataframe
 from .plot import plot_burn_chart
 
 
-def _print_summary(forecast) -> None:
+def _period_name(forecast, args: argparse.Namespace) -> str:
+    if getattr(args, "period_name", None):
+        return args.period_name
+    return "неделя" if forecast.sprint_length_days == 7 else "спринт"
+
+
+def _print_summary(forecast, args: argparse.Namespace | None = None) -> None:
+    period = "период"
+    if args is not None:
+        period = _period_name(forecast, args)
     print("=== Сводка ===")
     print(f"Начальный объём работы: {forecast.initial_backlog_size}")
     print(f"Объём работы:           {forecast.backlog_size}")
-    print(f"Длительность спринта:   {forecast.sprint_length_days}")
+    print(f"Длина периода:          {forecast.sprint_length_days} д ({period})")
     print(f"Дата отчёта:            {forecast.report_date}")
-    print(f"Текущий спринт:         {forecast.current_sprint}")
+    print(f"Текущий {period}:       {forecast.current_sprint}")
     print(f"Остаток работы:         {forecast.remaining_work}")
     print(
         f"Велосити:               {forecast.velocity_mean:.4g} "
@@ -32,24 +41,41 @@ def _print_summary(forecast) -> None:
     df = forecast_to_dataframe(forecast)
     # Show future probabilities more clearly
     future = df[df["n"] > 0][
-        ["sprint", "start", "end", "n", "prob_finish_by", "prob_this_iteration"]
+        [
+            "sprint",
+            "start",
+            "end",
+            "n",
+            "prob_finish_by",
+            "prob_finish_by_freeze",
+            "prob_this_iteration",
+        ]
     ]
     if not future.empty:
-        print("=== Вероятность успеть к спринту ===")
+        print(f"=== Вероятность успеть к {period} ===")
         for _, row in future.iterrows():
             p = row["prob_finish_by"]
+            pf = row["prob_finish_by_freeze"]
             dp = row["prob_this_iteration"]
             dp_s = "—" if dp is None or (isinstance(dp, float) and dp != dp) else f"{dp:.4%}"
+            pf_s = "—" if pf is None or (isinstance(pf, float) and pf != pf) else f"{pf:.4%}"
             print(
-                f"Спринт {int(row['sprint']):2d} (N={int(row['n']):2d}) "
-                f"{row['end']}: P={p:.4%}  ΔP={dp_s}"
+                f"{period.capitalize()} {int(row['sprint']):2d} (N={int(row['n']):2d}) "
+                f"{row['end']}: P={p:.4%}  P|A=0={pf_s}  ΔP={dp_s}"
             )
 
 
 def _maybe_plot(forecast, args: argparse.Namespace) -> None:
     if args.no_chart:
         return
-    path = plot_burn_chart(forecast, output=args.chart, show=args.show_chart)
+    path = plot_burn_chart(
+        forecast,
+        output=args.chart,
+        show=args.show_chart,
+        period_name=_period_name(forecast, args),
+        estimate_unit=getattr(args, "estimate_unit", "story points"),
+        title=getattr(args, "chart_title", None),
+    )
     print(f"\nГрафик сохранён: {path.resolve()}")
 
 
@@ -63,7 +89,7 @@ def cmd_excel(args: argparse.Namespace) -> int:
         sprint_length_days=params["sprint_length_days"],
         sprint_count=args.sprint_count,
     )
-    _print_summary(forecast)
+    _print_summary(forecast, args)
     if args.json:
         payload = {
             "initial_backlog_size": forecast.initial_backlog_size,
@@ -100,7 +126,7 @@ def cmd_jira(args: argparse.Namespace) -> int:
         sprint_count=args.sprint_count,
         report_date=date.fromisoformat(args.report_date) if args.report_date else None,
     )
-    _print_summary(forecast)
+    _print_summary(forecast, args)
     _maybe_plot(forecast, args)
     return 0
 
@@ -120,6 +146,21 @@ def _add_chart_args(parser: argparse.ArgumentParser) -> None:
         "--show-chart",
         action="store_true",
         help="Показать окно matplotlib (если есть дисплей)",
+    )
+    parser.add_argument(
+        "--period-name",
+        default=None,
+        help="Подпись периода на графике (неделя/спринт). По умолчанию: неделя при length=7",
+    )
+    parser.add_argument(
+        "--estimate-unit",
+        default="story points",
+        help="Единица оценки на оси Y (например: story points, часы)",
+    )
+    parser.add_argument(
+        "--chart-title",
+        default=None,
+        help="Заголовок графика",
     )
 
 
@@ -147,8 +188,18 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Дата старта первого спринта YYYY-MM-DD",
     )
-    p_jira.add_argument("--sprint-length", type=int, default=7)
-    p_jira.add_argument("--sprint-count", type=int, default=15)
+    p_jira.add_argument(
+        "--sprint-length",
+        type=int,
+        default=7,
+        help="Длина периода в днях (7 = по неделям, 14 = по двухнедельным спринтам)",
+    )
+    p_jira.add_argument(
+        "--sprint-count",
+        type=int,
+        default=20,
+        help="Сколько периодов вперёд строить (для недель обычно 20–24)",
+    )
     p_jira.add_argument("--report-date", default=None, help="YYYY-MM-DD")
     p_jira.add_argument(
         "--estimate-field",

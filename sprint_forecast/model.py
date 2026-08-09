@@ -56,6 +56,8 @@ class SprintRow:
     prob_this_iteration: float | None
     n: int
     prob_finish_by: float | None
+    # Same as prob_finish_by but with A=0 / σA=0 («заморозка scope»).
+    prob_finish_by_freeze: float | None = None
 
 
 @dataclass
@@ -121,6 +123,7 @@ def compute_forecast(
     sprint_length_days: int = 7,
     sprint_count: int = 15,
     report_date: date | None = None,
+    trend_fit_periods: int = 15,
 ) -> SprintForecast:
     """
     Replicate the Formulas sheet from sprint_planning.xlsx.
@@ -130,6 +133,10 @@ def compute_forecast(
     - sprint_length_days: Formulas!B3 (SprintLen)
     - sprint_count: number of sprints from 1..N (sheet uses 15)
     - report_date: Formulas!B4; defaults to max completion date
+    - trend_fit_periods: Excel TREND uses only K13:K27 / J13:J27 (15 rows).
+      Fitting on a longer history (e.g. a multi-month plateau) flattens the
+      line and makes the intercept diverge from early remaining — keep 15
+      unless you intentionally want a full-history fit.
     """
     if not items:
         raise ValueError("items must not be empty")
@@ -218,14 +225,21 @@ def compute_forecast(
 
     remaining_work = initial_backlog_size + sum(added) - sum(done)
 
-    # TREND: known points are non-NA K13:K27 / J13:J27 with x = Excel row numbers 13..
-    # Array formula spills from F12/L12 with new_x = rows 13..27
+    # TREND (Excel F12 / L12 array formulas):
+    #   known Y = non-NA cells in K13:K27 / J13:J27  (at most `trend_fit_periods`)
+    #   known X = ROW(...) of those cells
+    #   new X   = ROW(K13:K27) in the sheet (15 values); we also extrapolate
+    #             further when sprint_count > 15 so weekly charts stay useful
+    #   spill   = results land in F12:F26 / L12:L26 — i.e. prediction for sprint
+    #             k is stored at sprint index k-1 (one row earlier on the chart)
     excel_row_for_sprint = {num: 12 + num for num in range(sprint_count + 1)}
+    fit_last = max(1, min(trend_fit_periods, sprint_count))
+
     known_remaining_x: list[float] = []
     known_remaining_y: list[float] = []
     known_lower_x: list[float] = []
     known_lower_y: list[float] = []
-    for num in range(1, sprint_count + 1):
+    for num in range(1, fit_last + 1):
         row = excel_row_for_sprint[num]
         if remaining[num] is not None:
             known_remaining_x.append(float(row))
@@ -234,29 +248,34 @@ def compute_forecast(
             known_lower_x.append(float(row))
             known_lower_y.append(float(lower[num]))
 
+    # Spill length in Excel is `trend_fit_periods` (F12:F26). For longer
+    # charts we still extrapolate the same fitted line across all periods.
     new_x = [float(excel_row_for_sprint[num]) for num in range(1, sprint_count + 1)]
     trend_remaining_vals = _linear_trend(known_remaining_y, known_remaining_x, new_x)
     trend_added_vals = _linear_trend(known_lower_y, known_lower_x, new_x)
-    # Place predictions for rows 13..27 into F12..F26 / L12..L26 (shift by -1 index)
+
     trend_remaining: list[float | None] = [None] * (sprint_count + 1)
     trend_added: list[float | None] = [None] * (sprint_count + 1)
     for i, value in enumerate(trend_remaining_vals):
-        # i=0 → prediction for row 13 → stored at sprint 0 (row 12)
-        target = i  # sprint index
-        if target <= sprint_count:
+        # i=0 → prediction for sprint 1 / row 13 → stored at sprint 0 (row 12)
+        target = i
+        if target < sprint_count:
+            # Excel: spill fills F12:F26 only — never writes F27 (sprint_count
+            # when sprint_count == trend_fit_periods). Same for longer runs:
+            # prediction for sprint k lives at index k-1; index sprint_count
+            # stays empty.
             trend_remaining[target] = value
     for i, value in enumerate(trend_added_vals):
         target = i
-        if target <= sprint_count:
+        if target < sprint_count:
             trend_added[target] = value
-    # Excel F27/L27 are outside the spill (or #N/A); leave last unused slot None if needed
-    if sprint_count >= 15:
-        # Sheet has F27 = #N/A explicitly; predictions fill F12:F26 only (15 values)
-        pass
 
     # Probabilities
     n_values = [num - current_sprint for num in range(sprint_count + 1)]
     prob_finish: list[float | None] = []
+    # Scope-freeze scenario: no further additions (A=0, σA=0). Useful when
+    # baseline P is ~0 because addlocity ≥ velocity.
+    prob_finish_freeze: list[float | None] = []
     for n in n_values:
         if n > 0:
             mean = n * (velocity_mean - addlocity_mean)
@@ -267,8 +286,17 @@ def compute_forecast(
             else:
                 prob = float(1.0 - norm.cdf(remaining_work, loc=mean, scale=std))
             prob_finish.append(prob)
+
+            mean_f = n * velocity_mean
+            std_f = sqrt(n * (velocity_std**2))
+            if std_f == 0:
+                prob_f = 1.0 if remaining_work < mean_f else 0.0
+            else:
+                prob_f = float(1.0 - norm.cdf(remaining_work, loc=mean_f, scale=std_f))
+            prob_finish_freeze.append(prob_f)
         else:
             prob_finish.append(None)
+            prob_finish_freeze.append(None)
 
     prob_iteration: list[float | None] = [None]
     for num in range(1, sprint_count + 1):
@@ -298,6 +326,7 @@ def compute_forecast(
                 prob_this_iteration=prob_iteration[num],
                 n=n_values[num],
                 prob_finish_by=prob_finish[num],
+                prob_finish_by_freeze=prob_finish_freeze[num],
             )
         )
 
@@ -339,6 +368,7 @@ def forecast_to_dataframe(forecast: SprintForecast):
                 "prob_this_iteration": s.prob_this_iteration,
                 "n": s.n,
                 "prob_finish_by": s.prob_finish_by,
+                "prob_finish_by_freeze": s.prob_finish_by_freeze,
             }
         )
     return pd.DataFrame(rows)
